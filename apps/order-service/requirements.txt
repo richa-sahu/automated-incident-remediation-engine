@@ -1,0 +1,7 @@
+fastapi==0.111.0
+uvicorn==0.30.1
+pydantic==2.7.4
+# We add these now so the folder is complete for OTel later
+opentelemetry-api==1.25.0
+opentelemetry-sdk==1.25.0
+opentelemetry-instrumentation-fastapi==0.46b0

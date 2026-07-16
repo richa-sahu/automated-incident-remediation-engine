@@ -1,0 +1,16 @@
+# Virtual Environments
+.venv/
+venv/
+ENV/
+__pycache__/
+*.pyc
+
+# IDEs and System files
+.vscode/
+.idea/
+.DS_Store
+
+# Telemetry & Security local keys
+*.pem
+*.log
+.env
