@@ -9,24 +9,19 @@ metadata:
     component: jenkins-agent
 spec:
   containers:
-  - name: docker-cli
-    image: docker:cli
+  - name: build-tools
+    image: line/kubectl:latest
     command:
-    - sleep
-    args:
-    - infinity
+    - cat
+    tty: true
+    securityContext:
+      runAsUser: 0
     env:
     - name: DOCKER_API_VERSION
       value: "1.44"
     volumeMounts:
     - mountPath: /var/run/docker.sock
       name: docker-sock
-  - name: k8s-cli
-    image: bitnami/kubectl:latest
-    command:
-    - sleep
-    args:
-    - infinity
   volumes:
   - name: docker-sock
     hostPath:
@@ -48,7 +43,7 @@ spec:
 
         stage('Build Docker Image') {
             steps {
-                container('docker-cli') {
+                container('build-tools') {
                     echo 'Building container image inside Minikube runtime...'
                     sh "docker build -t ${REGISTRY_IMAGE} ./apps/order-service"
                 }
@@ -57,7 +52,7 @@ spec:
 
         stage('Kubernetes Deployment') {
             steps {
-                container('k8s-cli') {
+                container('build-tools') {
                     echo 'Applying manifests to local Kubernetes cluster...'
                     sh "kubectl apply -f k8s/base/deployment.yaml"
                     sh "kubectl apply -f k8s/base/service.yaml"
@@ -67,7 +62,7 @@ spec:
 
         stage('Verify Rollout') {
             steps {
-                container('k8s-cli') {
+                container('build-tools') {
                     echo 'Checking pod deployment status...'
                     sh "kubectl rollout status deployment/order-service --timeout=60s"
                 }
@@ -81,7 +76,7 @@ spec:
         }
         failure {
             echo 'Pipeline failed. Check pod status:'
-            container('k8s-cli') {
+            container('build-tools') {
                 sh 'kubectl get pods'
             }
         }
