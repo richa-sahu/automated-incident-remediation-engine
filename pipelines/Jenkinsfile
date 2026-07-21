@@ -10,17 +10,23 @@ metadata:
 spec:
   containers:
   - name: build-tools
-    image: alpine/k8s:1.28.2
+    image: docker:24.0.7-dind
     command:
-    - cat
-    tty: true
+    - sleep
+    args:
+    - infinity
     volumeMounts:
     - mountPath: /var/run/docker.sock
       name: docker-sock
+    - mountPath: /usr/local/bin/kubectl
+      name: kubectl-bin
   volumes:
   - name: docker-sock
     hostPath:
       path: /var/run/docker.sock
+  - name: kubectl-bin
+    hostPath:
+      path: /usr/local/bin/kubectl
 '''
         }
     }
