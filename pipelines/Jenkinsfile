@@ -1,0 +1,58 @@
+pipeline {
+    agent any
+
+    environment {
+        // Points to the internal Minikube registry setup
+        REGISTRY_IMAGE = 'order-service:latest'
+    }
+
+    stages {
+        stage('Checkout Code') {
+            steps {
+                // Pulls the latest files from your Git branch
+                checkout scm
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    echo 'Building container image inside Minikube runtime...'
+                    // Standard Docker build matching our multi-stage Dockerfile
+                    sh "docker build -t ${REGISTRY_IMAGE} ./apps/order-service"
+                }
+            }
+        }
+
+        stage('Kubernetes Deployment') {
+            steps {
+                script {
+                    echo 'Applying manifests to local Kubernetes cluster...'
+                    // Deploys our Day 2 configurations declaratively
+                    sh "kubectl apply -f k8s/base/deployment.yaml"
+                    sh "kubectl apply -f k8s/base/service.yaml"
+                }
+            }
+        }
+
+        stage('Verify Rollout') {
+            steps {
+                script {
+                    echo 'Checking pod deployment status...'
+                    // Verifies that the containers initialized cleanly
+                    sh "kubectl rollout status deployment/order-service --timeout=60s"
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'Deployment Pipeline executed successfully! App is active.'
+        }
+        failure {
+            echo 'Pipeline failed. Checking cluster event logs for diagnostic data.'
+            sh 'kubectl get pods'
+        }
+    }
+}
