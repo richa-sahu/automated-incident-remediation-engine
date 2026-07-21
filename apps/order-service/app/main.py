@@ -1,89 +1,97 @@
-import logging
+import os
 import time
-import random
-from pydantic import BaseModel
-from fastapi import FastAPI, HTTPException, Response, status
+import asyncio
+from fastapi import FastAPI, Response, status
+from prometheus_fastapi_instrumentator import Instrumentator
 
-# 1. Configure Structured Logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[logging.StreamHandler()]
-)
-logger = logging.getLogger("order-service")
+# OpenTelemetry imports
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.resources import Resource, SERVICE_NAME
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
-app = FastAPI(
-    title="AIRE Order Processing Service",
-    description="Microservice with a built-in synthetic fault-injection switch.",
-    version="1.0.0"
-)
+# Initialize FastAPI App
+app = FastAPI(title="Order Service", version="1.0.0")
 
-# 2. State Management for Chaos Simulation
-SYSTEM_HEALTHY = True
+# Setup OpenTelemetry Tracer
+OTEL_COLLECTOR_URL = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://otel-collector.monitoring.svc.cluster.local:4317")
+resource = Resource(attributes={SERVICE_NAME: "order-service"})
+provider = TracerProvider(resource=resource)
 
-# Data Models
-class Order(BaseModel):
-    item: str
-    quantity: int
-    price: float
+# Use OTLP exporter if running in cluster environment
+try:
+    processor = BatchSpanProcessor(OTLPSpanExporter(endpoint=OTEL_COLLECTOR_URL, insecure=True))
+    provider.add_span_processor(processor)
+except Exception as e:
+    print(f"OTEL Exporter warning: {e}")
 
-class FaultConfig(BaseModel):
-    healthy: bool
+trace.set_tracer_provider(provider)
+tracer = trace.get_tracer("order-service-tracer")
 
-# 3. Routes & Core Logic
-@app.get("/", tags=["Health"])
-def health_check():
-    """Standard Kubernetes liveness/readiness probe target."""
-    if not SYSTEM_HEALTHY:
-        logger.warning("Health check requested while system is degraded.")
-    return {"status": "healthy" if SYSTEM_HEALTHY else "degraded"}
+# Instrument FastAPI app
+FastAPIInstrumentor.instrument_app(app)
 
+# Expose /metrics for Prometheus scraping
+Instrumentator().instrument(app).expose(app)
 
-@app.post("/orders", status_code=status.HTTP_201_CREATED, tags=["Business Business"])
-def create_order(order: Order, response: Response):
-    """Processes customer incoming orders. Simulates degradation if faults are injected."""
-    global SYSTEM_HEALTHY
+# Chaos / Fault-Injection State
+chaos_state = {
+    "latency_seconds": 0,
+    "memory_leak_mb": [],
+    "force_error": False
+}
 
-    # --- SIMULATE SYSTEM FAULT (CHAOS TRIGGERED) ---
-    if not SYSTEM_HEALTHY:
-        # 50% chance of introducing high database latency (8-12 seconds)
-        if random.choice([True, False]):
-            latency = random.uniform(8.0, 12.0)
-            logger.error(f"DATABASE TIMEOUT: Simulating severe network bottleneck. Delaying response by {latency:.2f}s")
-            time.sleep(latency)
-            raise HTTPException(
-                status_code=status.HTTP_504_GATEWAY_TIMEOUT, 
-                detail="Database connection pool exhausted due to thread blocking."
-            )
-        # 50% chance of throwing raw HTTP 500 errors
-        else:
-            logger.error("CRITICAL FAILURE: Unexpected internal exception during transaction validation.")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Internal Server Error: Failed to write transaction log write lock."
-            )
-    
-    # --- NORMAL HEALTHY BEHAVIOR ---
-    # Standard negligible API processing delay (10-50ms)
-    time.sleep(random.uniform(0.01, 0.05))
-    
-    order_id = random.randint(100000, 999999)
-    logger.info(f"SUCCESS: Processed order #{order_id} for {order.quantity}x '{order.item}'")
-    
-    return {
-        "order_id": order_id,
-        "status": "processed",
-        "timestamp": time.time()
-    }
+@app.get("/")
+def read_root():
+    return {"service": "order-service", "status": "healthy"}
 
+@app.get("/health")
+def health_check(response: Response):
+    if chaos_state["force_error"]:
+        response.status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
+        return {"status": "UNHEALTHY", "cause": "Fault injected"}
+    return {"status": "UP"}
 
-@app.post("/inject-fault", tags=["Chaos Engineering"])
-def toggle_fault(config: FaultConfig):
-    """The Sabotage Switch. Use this endpoint to toggle cluster failures on or off."""
-    global SYSTEM_HEALTHY
-    SYSTEM_HEALTHY = config.healthy
-    
-    state_str = "HEALTHY" if SYSTEM_HEALTHY else "DEGRADED / SABOTAGED"
-    logger.critical(f"CHAOS CONFIG CHANGED: System state manually switched to [{state_str}]")
-    
-    return {"message": f"System state updated successfully to {state_str}."}
+@app.post("/orders")
+async def create_order():
+    with tracer.start_as_current_span("process_order") as span:
+        # Simulate fault-injected latency if active
+        if chaos_state["latency_seconds"] > 0:
+            span.set_attribute("chaos.latency_injected", chaos_state["latency_seconds"])
+            await asyncio.sleep(chaos_state["latency_seconds"])
+
+        # Simulate fault-injected HTTP 500 error
+        if chaos_state["force_error"]:
+            span.set_attribute("error", True)
+            raise RuntimeError("Injected order processing failure")
+
+        span.set_attribute("order.status", "created")
+        return {"order_id": "ORD-9921", "status": "CREATED", "amount": 149.99}
+
+# --- FAULT INJECTION ENDPOINTS (For AIRE Remediation Testing) ---
+
+@app.post("/inject/latency/{seconds}")
+def inject_latency(seconds: int):
+    chaos_state["latency_seconds"] = seconds
+    return {"message": f"Injected {seconds}s latency into /orders workflow"}
+
+@app.post("/inject/error")
+def inject_error(enable: bool = True):
+    chaos_state["force_error"] = enable
+    return {"message": f"Force error state set to {enable}"}
+
+@app.post("/inject/memory/{mb}")
+def inject_memory_leak(mb: int):
+    # Allocate byte array to simulate high memory pressure
+    leak = bytearray(mb * 1024 * 1024)
+    chaos_state["memory_leak_mb"].append(leak)
+    return {"message": f"Allocated ~{mb}MB of memory. Total leaked chunks: {len(chaos_state['memory_leak_mb'])}"}
+
+@app.post("/inject/reset")
+def reset_faults():
+    chaos_state["latency_seconds"] = 0
+    chaos_state["force_error"] = False
+    chaos_state["memory_leak_mb"].clear()
+    return {"message": "All injected faults cleared."}
