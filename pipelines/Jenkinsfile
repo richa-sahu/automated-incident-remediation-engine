@@ -9,11 +9,9 @@ metadata:
     component: jenkins-agent
 spec:
   containers:
-  - name: build-tools
-    image: line/kubectl:latest
-    command:
-    - cat
-    tty: true
+  - name: jnlp
+    image: local-jenkins-agent:latest
+    imagePullPolicy: Never
     securityContext:
       runAsUser: 0
     env:
@@ -43,29 +41,23 @@ spec:
 
         stage('Build Docker Image') {
             steps {
-                container('build-tools') {
-                    echo 'Building container image inside Minikube runtime...'
-                    sh "docker build -t ${REGISTRY_IMAGE} ./apps/order-service"
-                }
+                echo 'Building container image inside Minikube runtime...'
+                sh "docker build -t ${REGISTRY_IMAGE} ./apps/order-service"
             }
         }
 
         stage('Kubernetes Deployment') {
             steps {
-                container('build-tools') {
-                    echo 'Applying manifests to local Kubernetes cluster...'
-                    sh "kubectl apply -f k8s/base/deployment.yaml"
-                    sh "kubectl apply -f k8s/base/service.yaml"
-                }
+                echo 'Applying manifests to local Kubernetes cluster...'
+                sh "kubectl apply -f k8s/base/deployment.yaml"
+                sh "kubectl apply -f k8s/base/service.yaml"
             }
         }
 
         stage('Verify Rollout') {
             steps {
-                container('build-tools') {
-                    echo 'Checking pod deployment status...'
-                    sh "kubectl rollout status deployment/order-service --timeout=60s"
-                }
+                echo 'Checking pod deployment status...'
+                sh "kubectl rollout status deployment/order-service --timeout=60s"
             }
         }
     }
@@ -75,10 +67,8 @@ spec:
             echo 'Deployment Pipeline executed successfully! App is active.'
         }
         failure {
-            echo 'Pipeline failed. Check pod status:'
-            container('build-tools') {
-                sh 'kubectl get pods'
-            }
+            echo 'Pipeline failed. Checking pod status...'
+            sh 'kubectl get pods'
         }
     }
 }
