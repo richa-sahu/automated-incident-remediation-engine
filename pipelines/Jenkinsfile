@@ -9,24 +9,28 @@ metadata:
     component: jenkins-agent
 spec:
   containers:
-  - name: build-tools
-    image: docker:24.0.7-dind
+  - name: docker-cli
+    image: docker:cli
     command:
     - sleep
     args:
     - infinity
+    env:
+    - name: DOCKER_API_VERSION
+      value: "1.44"
     volumeMounts:
     - mountPath: /var/run/docker.sock
       name: docker-sock
-    - mountPath: /usr/local/bin/kubectl
-      name: kubectl-bin
+  - name: k8s-cli
+    image: bitnami/kubectl:latest
+    command:
+    - sleep
+    args:
+    - infinity
   volumes:
   - name: docker-sock
     hostPath:
       path: /var/run/docker.sock
-  - name: kubectl-bin
-    hostPath:
-      path: /usr/local/bin/kubectl
 '''
         }
     }
@@ -44,7 +48,7 @@ spec:
 
         stage('Build Docker Image') {
             steps {
-                container('build-tools') {
+                container('docker-cli') {
                     echo 'Building container image inside Minikube runtime...'
                     sh "docker build -t ${REGISTRY_IMAGE} ./apps/order-service"
                 }
@@ -53,7 +57,7 @@ spec:
 
         stage('Kubernetes Deployment') {
             steps {
-                container('build-tools') {
+                container('k8s-cli') {
                     echo 'Applying manifests to local Kubernetes cluster...'
                     sh "kubectl apply -f k8s/base/deployment.yaml"
                     sh "kubectl apply -f k8s/base/service.yaml"
@@ -63,7 +67,7 @@ spec:
 
         stage('Verify Rollout') {
             steps {
-                container('build-tools') {
+                container('k8s-cli') {
                     echo 'Checking pod deployment status...'
                     sh "kubectl rollout status deployment/order-service --timeout=60s"
                 }
@@ -77,7 +81,7 @@ spec:
         }
         failure {
             echo 'Pipeline failed. Check pod status:'
-            container('build-tools') {
+            container('k8s-cli') {
                 sh 'kubectl get pods'
             }
         }
